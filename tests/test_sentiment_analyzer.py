@@ -2,9 +2,7 @@ import pytest
 import boto3
 import json
 import os
-import io # <-- FIX #2: Import the 'io' module for creating streams
-
-# --- FIX #1: Import 'mock_aws' from moto ---
+import io
 from moto import mock_aws
 
 # Set ALL required environment variables BEFORE the lambda_function is imported.
@@ -32,7 +30,7 @@ def aws_credentials():
 @pytest.fixture(scope='function')
 def mock_environment(aws_credentials):
     """Set up the mocked AWS environment."""
-    with mock_aws(): # This will now work because of the import
+    with mock_aws():
         s3 = boto3.client('s3')
         dynamodb = boto3.resource('dynamodb')
         sns = boto3.client('sns')
@@ -54,7 +52,8 @@ def mock_environment(aws_credentials):
 
 # --- Test Cases ---
 
-def test_handler_positive_feedback(mock_environment, monkeypatch):
+# --- FIX: Add aws_credentials fixture as an argument ---
+def test_handler_positive_feedback(aws_credentials, mock_environment, monkeypatch):
     feedback_bucket = 'test-feedback-bucket'
     feedback_key = 'positive-review.txt'
     feedback_content = "The new user interface is fantastic and very easy to use. Great job!"
@@ -91,7 +90,8 @@ def test_handler_positive_feedback(mock_environment, monkeypatch):
     assert len(cw_calls) == 0
 
 
-def test_handler_negative_high_urgency_feedback(mock_environment, monkeypatch):
+# --- FIX: Add aws_credentials fixture as an argument ---
+def test_handler_negative_high_urgency_feedback(aws_credentials, mock_environment, monkeypatch):
     feedback_bucket = 'test-feedback-bucket'
     feedback_key = 'urgent-issue.txt'
     
@@ -119,16 +119,10 @@ def test_handler_negative_high_urgency_feedback(mock_environment, monkeypatch):
     assert sns_calls[0]['urgency'] == 'high'
 
 def test_bedrock_output_parsing_with_extra_text(monkeypatch):
-    """
-    Unit tests the `analyze_feedback_with_bedrock` function specifically.
-    Ensures the regex correctly extracts a JSON object even if the LLM adds extra text.
-    """
     messy_llm_output = '```json\n{"sentiment": "negative", "sentiment_score": 0.2, "topics": ["Billing"], "urgency": "medium"}\n```'
     
-    # --- FIX #2: Create a realistic mock response with a .read() method ---
     def mock_invoke_model(*args, **kwargs):
         response_payload = json.dumps({"generation": messy_llm_output})
-        # Use io.BytesIO to create an in-memory binary stream, just like Boto3's StreamingBody
         return {
             'body': io.BytesIO(response_payload.encode('utf-8'))
         }
