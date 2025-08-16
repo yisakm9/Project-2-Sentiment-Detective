@@ -4,17 +4,17 @@ import json
 import os
 
 # --- THIS IS THE FIX ---
-# Set the default region BEFORE boto3 is ever used.
-# This ensures that when lambda_function.py is imported and initializes its global
-# boto3 clients, it knows which region to use.
+# Set ALL required environment variables BEFORE the lambda_function is imported.
 os.environ['AWS_DEFAULT_REGION'] = 'us-east-1'
+os.environ['DDB_TABLE_NAME'] = 'test-sentiment-table'
+os.environ['SNS_TOPIC_ARN'] = 'arn:aws:sns:us-east-1:123456789012:test-alerts-topic'
 # --- END OF FIX ---
 
 # Add the 'lambda' directory to the Python path so we can import the handler
 import sys
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'lambda')))
 
-# This import will now succeed because the region is set
+# This import will now succeed
 from lambda_function import lambda_handler, analyze_feedback_with_bedrock
 
 # --- Pytest Fixtures ---
@@ -22,7 +22,6 @@ from lambda_function import lambda_handler, analyze_feedback_with_bedrock
 @pytest.fixture(scope='function')
 def aws_credentials():
     """Mocked AWS Credentials for moto."""
-    # These are still useful for moto to intercept calls correctly.
     os.environ['AWS_ACCESS_KEY_ID'] = 'testing'
     os.environ['AWS_SECRET_ACCESS_KEY'] = 'testing'
     os.environ['AWS_SECURITY_TOKEN'] = 'testing'
@@ -30,10 +29,9 @@ def aws_credentials():
 
 @pytest.fixture(scope='function')
 def mock_environment(aws_credentials):
-    """Set up the mocked AWS environment and Lambda environment variables."""
-    os.environ['DDB_TABLE_NAME'] = 'test-sentiment-table'
-    os.environ['SNS_TOPIC_ARN'] = 'arn:aws:sns:us-east-1:123456789012:test-alerts-topic'
-    
+    """Set up the mocked AWS environment."""
+    # The environment variables are now set globally, so the fixture
+    # only needs to set up the mock AWS resources.
     with mock_aws():
         s3 = boto3.client('s3')
         dynamodb = boto3.resource('dynamodb')
@@ -56,7 +54,6 @@ def mock_environment(aws_credentials):
 
 # --- Test Cases (no changes needed below this line) ---
 # ... (the rest of your test functions are perfect and do not need to be changed) ...
-
 def test_handler_positive_feedback(mock_environment, monkeypatch):
     """
     Tests the full end-to-end flow with a standard, positive feedback file.
