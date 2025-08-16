@@ -5,12 +5,20 @@ import os
 import io
 from moto import mock_aws
 
-# Set ALL required environment variables BEFORE the lambda_function is imported.
+# --- THIS IS THE FINAL FIX ---
+# Set ALL required environment variables for boto3 BEFORE the lambda_function is imported.
+# This includes the region, any variables the lambda code uses, and dummy credentials
+# for the boto3 client initialization that happens at import time.
 os.environ['AWS_DEFAULT_REGION'] = 'us-east-1'
 os.environ['DDB_TABLE_NAME'] = 'test-sentiment-table'
-os.environ['SNS_TOPIC_ARN'] = 'arn:aws:sns:us-east-1:123456789012:test-alerts-topic'
+os.environ['SNS_TOP_IC_ARN'] = 'arn:aws:sns:us-east-1:123456789012:test-alerts-topic'
+os.environ['AWS_ACCESS_KEY_ID'] = 'testing'
+os.environ['AWS_SECRET_ACCESS_KEY'] = 'testing'
+os.environ['AWS_SECURITY_TOKEN'] = 'testing'
+os.environ['AWS_SESSION_TOKEN'] = 'testing'
+# --- END OF FIX ---
 
-# Add the 'lambda' directory to the Python path so we can import the handler
+# Add the 'lambda' directory to the Python path
 import sys
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'lambda')))
 
@@ -19,16 +27,9 @@ from lambda_function import lambda_handler, analyze_feedback_with_bedrock
 
 # --- Pytest Fixtures ---
 
+# The aws_credentials fixture is no longer needed as the credentials are set globally for the test run.
 @pytest.fixture(scope='function')
-def aws_credentials():
-    """Mocked AWS Credentials for moto."""
-    os.environ['AWS_ACCESS_KEY_ID'] = 'testing'
-    os.environ['AWS_SECRET_ACCESS_KEY'] = 'testing'
-    os.environ['AWS_SECURITY_TOKEN'] = 'testing'
-    os.environ['AWS_SESSION_TOKEN'] = 'testing'
-
-@pytest.fixture(scope='function')
-def mock_environment(aws_credentials):
+def mock_environment():
     """Set up the mocked AWS environment."""
     with mock_aws():
         s3 = boto3.client('s3')
@@ -52,8 +53,8 @@ def mock_environment(aws_credentials):
 
 # --- Test Cases ---
 
-# --- FIX: Add aws_credentials fixture as an argument ---
-def test_handler_positive_feedback(aws_credentials, mock_environment, monkeypatch):
+# The aws_credentials argument is removed from the function signature
+def test_handler_positive_feedback(mock_environment, monkeypatch):
     feedback_bucket = 'test-feedback-bucket'
     feedback_key = 'positive-review.txt'
     feedback_content = "The new user interface is fantastic and very easy to use. Great job!"
@@ -90,8 +91,8 @@ def test_handler_positive_feedback(aws_credentials, mock_environment, monkeypatc
     assert len(cw_calls) == 0
 
 
-# --- FIX: Add aws_credentials fixture as an argument ---
-def test_handler_negative_high_urgency_feedback(aws_credentials, mock_environment, monkeypatch):
+# The aws_credentials argument is removed from the function signature
+def test_handler_negative_high_urgency_feedback(mock_environment, monkeypatch):
     feedback_bucket = 'test-feedback-bucket'
     feedback_key = 'urgent-issue.txt'
     
