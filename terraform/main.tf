@@ -169,15 +169,8 @@ resource "aws_iam_role_policy" "lambda_custom_policy" {
   })
 }
 
+# In terraform/main.tf
 
-# Lambda Packaging (Cross-Platform)
-resource "null_resource" "lambda_build" {
-  provisioner "local-exec" {
-    command = "powershell.exe -Command Compress-Archive -Path lambda_function.py -DestinationPath lambda_package.zip -Force"
-  }
-}
-
-# Lambda Function
 resource "aws_lambda_function" "analysis" {
   function_name = "sentiment-detective-analyzer"
   runtime       = "python3.11"
@@ -185,8 +178,11 @@ resource "aws_lambda_function" "analysis" {
   role          = aws_iam_role.lambda_role.arn
   timeout       = 60
 
-  filename         = "lambda_package.zip"
+  # --- CORRECTED CODE ---
+  # The GitHub workflow creates this zip file and moves it here for Terraform to find.
+  filename         = "lambda_package.zip" 
   source_code_hash = filebase64sha256("lambda_package.zip")
+  # --- END OF CORRECTION ---
 
   environment {
     variables = {
@@ -200,13 +196,12 @@ resource "aws_lambda_function" "analysis" {
     Project = "SentimentDetective"
   }
 
-  
-  depends_on = [
-    null_resource.lambda_build
-    
-  ]
+  # --- DELETE THIS LINE ---
+  # depends_on = [
+  #   null_resource.lambda_build
+  # ]
+  # --- END OF DELETION ---
 }
-
 
 # CloudWatch Logs Retention
 resource "aws_cloudwatch_log_group" "lambda_logs" {
