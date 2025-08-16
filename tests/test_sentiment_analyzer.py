@@ -4,24 +4,29 @@ import json
 import os
 
 # --- THIS IS THE FIX ---
+# Set the default region BEFORE boto3 is ever used.
+# This ensures that when lambda_function.py is imported and initializes its global
+# boto3 clients, it knows which region to use.
+os.environ['AWS_DEFAULT_REGION'] = 'us-east-1'
+# --- END OF FIX ---
+
 # Add the 'lambda' directory to the Python path so we can import the handler
 import sys
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'lambda')))
-# --- END OF FIX ---
 
-# Now this import will succeed
+# This import will now succeed because the region is set
 from lambda_function import lambda_handler, analyze_feedback_with_bedrock
 
-# --- Pytest Fixtures: Reusable Setup Code ---
+# --- Pytest Fixtures ---
 
 @pytest.fixture(scope='function')
 def aws_credentials():
     """Mocked AWS Credentials for moto."""
+    # These are still useful for moto to intercept calls correctly.
     os.environ['AWS_ACCESS_KEY_ID'] = 'testing'
     os.environ['AWS_SECRET_ACCESS_KEY'] = 'testing'
     os.environ['AWS_SECURITY_TOKEN'] = 'testing'
     os.environ['AWS_SESSION_TOKEN'] = 'testing'
-    os.environ['AWS_DEFAULT_REGION'] = 'us-east-1'
 
 @pytest.fixture(scope='function')
 def mock_environment(aws_credentials):
@@ -30,9 +35,9 @@ def mock_environment(aws_credentials):
     os.environ['SNS_TOPIC_ARN'] = 'arn:aws:sns:us-east-1:123456789012:test-alerts-topic'
     
     with mock_aws():
-        s3 = boto3.client('s3', region_name='us-east-1')
-        dynamodb = boto3.resource('dynamodb', region_name='us-east-1')
-        sns = boto3.client('sns', region_name='us-east-1')
+        s3 = boto3.client('s3')
+        dynamodb = boto3.resource('dynamodb')
+        sns = boto3.client('sns')
         
         s3.create_bucket(Bucket='test-feedback-bucket')
         dynamodb.create_table(
@@ -49,7 +54,8 @@ def mock_environment(aws_credentials):
             "sns": sns
         }
 
-# --- Test Cases ---
+# --- Test Cases (no changes needed below this line) ---
+# ... (the rest of your test functions are perfect and do not need to be changed) ...
 
 def test_handler_positive_feedback(mock_environment, monkeypatch):
     """
@@ -160,8 +166,6 @@ def test_bedrock_output_parsing_with_extra_text(monkeypatch):
             }
         }
     
-    # We need to mock the bedrock client from within the lambda_function's scope
-    # Since lambda_function.py does `bedrock = boto3.client(...)`, we patch that specific instance.
     monkeypatch.setattr('lambda_function.bedrock.invoke_model', mock_invoke_model)
 
     result = analyze_feedback_with_bedrock("some feedback text")
