@@ -1,0 +1,124 @@
+name: Deploy Sentiment Detective
+
+on:
+  push:
+    branches:
+      - develop   # Deploys to development
+      - staging   # Deploys to staging
+      - main      # Deploys to production
+  workflow_dispatch: # Allows manual runs from the Actions UI
+
+jobs:
+  lint-and-test:
+    name: Run Linter and Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r lambda/requirements.txt
+
+      # Optional: Add a linter like flake8 or pylint here
+      - name: Lint with flake8
+        run: |
+          pip install flake8
+          flake8 lambda/ --count --select=E9,F63,F7,F82 --show-source --statistics
+
+      - name: Run Unit Tests with Pytest
+        run: pytest tests/
+
+  build:
+    name: Build Lambda Artifact
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Create build directory
+        run: |
+          mkdir -p build
+          # Install dependencies into the build directory
+          pip install --target build -r lambda/requirements.txt
+          # Copy the Lambda function code into the build directory
+          cp lambda/lambda_function.py build/
+
+      - name: Zip artifact
+        run: |
+          cd build
+          zip -r ../lambda_package.zip .
+          cd ..
+
+      - name: Upload Lambda artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lambda-package
+          path: lambda_package.zip
+
+  deploy:
+    name: Deploy to AWS
+    needs: [lint-and-test, build] # This job runs only if lint, test, and build succeed
+    runs-on: ubuntu-latest
+
+    environment:
+      name: ${{ (github.ref_name == 'main' && 'production') || (github.ref_name == 'staging' && 'staging') || 'development' }}
+      url: ${{ steps.get_s3_url.outputs.url }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_KEY }}
+          aws-region: us-east-1
+
+      - name: Download Lambda artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: lambda-package
+
+      - name: Move Lambda artifact for Terraform
+        run: mv lambda_package.zip ./terraform/
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Set environment variable for tfvars
+        run: |
+          if [[ "${{ github.ref_name }}" == "main" ]]; then
+            echo "TF_VARS_FILE=prod.tfvars" >> $GITHUB_ENV
+          elif [[ "${{ github.ref_name }}" == "staging" ]]; then
+            echo "TF_VARS_FILE=staging.tfvars" >> $GITHUB_ENV
+          else
+            echo "TF_VARS_FILE=dev.tfvars" >> $GITHUB_ENV
+          fi
+
+      - name: Terraform Init
+        run: terraform init
+        working-directory: ./terraform
+
+      - name: Terraform Plan
+        run: terraform plan -var-file=${{ env.TF_VARS_FILE }} -out=tfplan
+        working-directory: ./terraform
+
+      - name: Terraform Apply
+        run: terraform apply -auto-approve tfplan
+        working-directory: ./terraform
+
+      - name: Get S3 Bucket Name output
+        id: get_s3_url
+        run: echo "url=https://s3.console.aws.amazon.com/s3/buckets/$(terraform output -raw s3_bucket_name)" >> $GITHUB_OUTPUT
+        working-directory: ./terraform
