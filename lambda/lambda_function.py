@@ -5,7 +5,6 @@ import re # Import the regular expression module
 from decimal import Decimal
 from urllib.parse import unquote_plus
 
-# ... (all other initializations are correct)  ...
 s3 = boto3.client("s3")
 dynamodb = boto3.resource("dynamodb")
 cloudwatch = boto3.client("cloudwatch")
@@ -16,7 +15,6 @@ SNS_TOPIC_ARN = os.environ.get("SNS_TOPIC_ARN")
 table = dynamodb.Table(DDB_TABLE_NAME)
 
 def lambda_handler(event, context):
-    # ... (this function is perfect, no changes needed) ...
     for record in event.get("Records", []):
         bucket = record["s3"]["bucket"]["name"]
         key = unquote_plus(record["s3"]["object"]["key"])
@@ -36,7 +34,6 @@ def analyze_feedback_with_bedrock(text):
     """
     Uses Bedrock foundation model to analyze sentiment, topics, and urgency.
     """
-    # ... (prompt is perfect, no changes needed) ...
     prompt = f"""
     You are a text analysis expert. Analyze the following customer feedback.
     Feedback: "{text}"
@@ -64,18 +61,17 @@ def analyze_feedback_with_bedrock(text):
     response_body = json.loads(response["body"].read())
     output_text = response_body['generation']
 
-    # --- FINAL CORRECTED CODE: Use regex to extract only the JSON block ---
     try:
-        # Find the JSON block using a regular expression
-        json_match = re.search(r'\{.*\}', output_text, re.DOTALL)
+        # --- THIS IS THE CORRECTED REGEX ---
+        # The '?' makes the search non-greedy, finding the first complete JSON block.
+        json_match = re.search(r'\{.*?\}', output_text, re.DOTALL)
         if json_match:
             json_str = json_match.group(0)
             result = json.loads(json_str)
         else:
-            # If no JSON is found, raise an error to be caught below
             raise ValueError("No JSON object found in the model's response.")
             
-    except (json.JSONDecodeError, ValueError, IndexError, KeyError) as e:
+    except (json.JSONDecodeError, ValueError) as e:
         print(f"Error processing model output: {e}")
         print(f"Raw output from model: {output_text}")
         result = { "sentiment": "unknown", "sentiment_score": 0.0, "topics": [], "error": "Failed to parse model output", "raw_output": output_text }
@@ -83,21 +79,19 @@ def analyze_feedback_with_bedrock(text):
     return result
 
 def store_results_in_dynamodb(item_id, analysis):
-    # ... (this function is perfect, no changes needed) ...
     score = analysis.get("sentiment_score", 0.0)
     if not isinstance(score, (int, float)):
         score = 0.0
     table.put_item(Item={
         "id": item_id,
-        "sentiment": analysis.get("sentiment", "neutral"),
+        "sentiment": analysis.get("sentiment", "unknown"), # Default to unknown on error
         "sentiment_score": Decimal(str(score)),
         "topics": analysis.get("topics", []),
         "urgency": analysis.get("urgency", "low")
     })
 
 def handle_analysis(analysis):
-    # ... (this function is perfect, no changes needed) ...
-    sentiment = analysis.get("sentiment", "neutral").lower()
+    sentiment = analysis.get("sentiment", "unknown").lower()
     urgency = analysis.get("urgency", "low").lower()
     if sentiment == "negative":
         publish_negative_sentiment_metric()
@@ -105,13 +99,11 @@ def handle_analysis(analysis):
         send_sns_alert(analysis)
 
 def publish_negative_sentiment_metric():
-    # ... (this function is perfect, no changes needed) ...
     cloudwatch.put_metric_data(
         Namespace="SentimentDetective",
         MetricData=[ { "MetricName": "NegativeSentimentCount", "Value": 1, "Unit": "Count" } ]
     )
 
 def send_sns_alert(analysis):
-    # ... (this function is perfect, no changes needed) ...
     message = ( f"🚨 High urgency issue detected!\n" f"Sentiment: {analysis.get('sentiment', 'N/A')}\n" f"Topics: {', '.join(analysis.get('topics', []))}\n" f"Urgency: {analysis.get('urgency', 'N/A')}" )
     sns.publish( TopicArn=SNS_TOPIC_ARN, Message=message, Subject="High Urgency Customer Feedback" )
