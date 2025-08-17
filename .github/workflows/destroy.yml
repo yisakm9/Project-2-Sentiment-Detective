@@ -1,5 +1,7 @@
 name: Destroy AWS Infrastructure
 
+# This 'workflow_dispatch' trigger makes the workflow manual.
+# It will show a "Run workflow" button in the GitHub Actions UI.
 on:
   workflow_dispatch:
     inputs:
@@ -34,6 +36,15 @@ jobs:
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
+
+      # --- THIS IS THE FIX ---
+      # Create a dummy zip file. Terraform requires this file to exist for the
+      # filebase64sha256() function in your HCL, even for a destroy operation.
+      # This step creates a placeholder file to satisfy that requirement.
+      - name: Create Dummy Lambda Package for Destroy
+        run: |
+          echo "This is a placeholder for the destroy workflow" > dummy.txt
+          zip terraform/lambda_package.zip dummy.txt
 
       - name: Set environment variable for tfvars
         run: |
