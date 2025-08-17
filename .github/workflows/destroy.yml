@@ -1,0 +1,56 @@
+name: Destroy AWS Infrastructure
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'The environment to destroy (e.g., development, staging, production)'
+        required: true
+        type: choice
+        options:
+          - development
+          - staging
+          - production
+
+jobs:
+  destroy:
+    name: Destroy Infrastructure
+    runs-on: ubuntu-latest
+    
+    # Use the selected environment for any protection rules
+    environment:
+      name: ${{ inputs.environment }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_KEY }}
+          aws-region: us-east-1
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Set environment variable for tfvars
+        run: |
+          if [[ "${{ inputs.environment }}" == "production" ]]; then
+            echo "TF_VARS_FILE=prod.tfvars" >> $GITHUB_ENV
+          elif [[ "${{ inputs.environment }}" == "staging" ]]; then
+            echo "TF_VARS_FILE=staging.tfvars" >> $GITHUB_ENV
+          else
+            echo "TF_VARS_FILE=dev.tfvars" >> $GITHUB_ENV
+          fi
+
+      - name: Terraform Init
+        run: terraform init
+        working-directory: ./terraform
+
+      - name: Terraform Destroy
+        # Runs 'terraform destroy' using the correct .tfvars file for the environment
+        # The '-auto-approve' flag confirms the destruction without manual input in the terminal
+        run: terraform destroy -auto-approve -var-file=${{ env.TF_VARS_FILE }}
+        working-directory: ./terraform
