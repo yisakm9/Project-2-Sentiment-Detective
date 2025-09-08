@@ -1,5 +1,3 @@
-# .github/workflows/deploy-dev.yml
-
 # Name of the full CI/CD workflow for the Dev environment.
 name: 'Terraform CI/CD for Dev'
 

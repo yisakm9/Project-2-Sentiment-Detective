@@ -38,7 +38,7 @@ module "lambda_function" {
   source           = "../../modules/lambda_function"
   project_name     = "SentimentDetective"
   iam_role_arn     = module.iam.lambda_role_arn
-  zip_file_path    = "../../../lambda_package.zip" # Path relative to this main.tf
+  zip_file_path    = "../../lambda_package.zip" # Path relative to this main.tf
   environment_variables = {
     DDB_TABLE_NAME = module.dynamodb.table_name
     SNS_TOPIC_ARN  = module.sns.topic_arn
@@ -58,7 +58,7 @@ module "cloudwatch" {
 
 # These resources connect the modules together.
 
-# Grant S3 permission to invoke the Lambda function
+# Grant  S3 permission to invoke the Lambda function
 resource "aws_lambda_permission" "allow_s3" {
   statement_id  = "AllowExecutionFromS3"
   action        = "lambda:InvokeFunction"
