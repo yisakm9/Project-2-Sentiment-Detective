@@ -56,7 +56,6 @@ module "cloudwatch" {
   environment_tags = var.environment_tags
 }
 
-# --- Glue Resources ---
 # These resources connect the modules together.
 
 # Grant S3 permission to invoke the Lambda function
