@@ -1,5 +1,0 @@
-
-boto3
-pytest
-# Moto is used for mocking AWS services during tests
-moto[s3,dynamodb,cloudwatch,bedrock,sns]

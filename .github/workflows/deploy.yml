@@ -1,124 +1,190 @@
-name: Deploy Sentiment Detective
+# .github/workflows/deploy-dev.yml
 
+# Name of the full CI/CD workflow for the Dev environment.
+name: 'Terraform CI/CD for Dev'
+
+# Triggers the workflow on pushes/PRs to main, or manually via the Actions tab.
+# Path filters ensure this only runs when relevant code changes.
 on:
   push:
     branches:
-      - develop   # Deploys to development
-      - staging   # Deploys to staging
-      - main      # Deploys to production
-  workflow_dispatch: # Allows manual runs from the Actions UI
+      - main
+    paths:
+      - 'environments/dev/**'
+      - 'modules/**'
+      - 'src/**'
+      - 'test/**'
+      - 'requirements.txt'
+      - '.github/workflows/deploy-dev.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'environments/dev/**'
+      - 'modules/**'
+      - 'src/**'
+      - 'test/**'
+      - 'requirements.txt'
+      - '.github/workflows/deploy-dev.yml'
+  workflow_dispatch:
+
+# --- Security Best Practice ---
+# Set default permissions for the GITHUB_TOKEN.
+permissions:
+  id-token: write      # Required for OIDC authentication to AWS
+  contents: read       # Required to checkout the repository
+  pull-requests: write # Required to post plan comments on the PR
 
 jobs:
-  lint-and-test:
-    name: Run Linter and Unit Tests
+  # JOB 1: BUILD, TEST, VALIDATE, SCAN, AND PLAN
+  # This job runs on all triggers to provide feedback on pull requests.
+  build_and_plan:
+    name: 'Build, Test & Plan'
     runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install dependencies
-        run: pip install -r lambda/requirements.txt
-
-      # Optional: Add a linter like flake8 or pylint here
-      - name: Lint with flake8
-        run: |
-          pip install flake8
-          flake8 lambda/ --count --select=E9,F63,F7,F82 --show-source --statistics
-
-      - name: Run Unit Tests with Pytest
-        run: pytest tests/
-
-  build:
-    name: Build Lambda Artifact
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Create build directory
-        run: |
-          mkdir -p build
-          # Install dependencies into the build directory
-          pip install --target build -r lambda/requirements.txt
-          # Copy the Lambda function code into the build directory
-          cp lambda/lambda_function.py build/
-
-      - name: Zip artifact
-        run: |
-          cd build
-          zip -r ../lambda_package.zip .
-          cd ..
-
-      - name: Upload Lambda artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: lambda-package
-          path: lambda_package.zip
-
-  deploy:
-    name: Deploy to AWS
-    needs: [lint-and-test, build] # This job runs only if lint, test, and build succeed
-    runs-on: ubuntu-latest
-
-    environment:
-      name: ${{ (github.ref_name == 'main' && 'production') || (github.ref_name == 'staging' && 'staging') || 'development' }}
-      url: ${{ steps.get_s3_url.outputs.url }}
+    
+    env:
+      AWS_REGION: 'us-east-1'
+      TF_WORKING_DIR: 'environments/dev'
 
     steps:
-      - name: Checkout code
+      - name: 'Checkout Repository'
         uses: actions/checkout@v4
 
-      - name: Configure AWS Credentials
+      - name: 'Configure AWS Credentials (OIDC)'
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_KEY }}
-          aws-region: us-east-1
+          role-to-assume: arn:aws:iam::456202167790:role/githubaction #  IAM ROLE ARN
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: GitHubActions-Terraform-Plan
 
-      - name: Download Lambda artifact
+      # --- Lambda Function Build & Test Steps ---
+      - name: 'Set up Python 3.11'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: 'Install Python Dependencies'
+        run: pip install -r requirements.txt
+      
+      - name: 'Run Pytest Unit Tests'
+        # Pytest will automatically discover tests in the 'test/' directory
+        run: pytest test/
+      
+      - name: 'Package Lambda Function into lambda_package.zip'
+        run: |
+          cd src/lambda_function
+          zip -r ../../lambda_package.zip .
+
+      # --- Terraform Static Analysis Steps ---
+      - name: 'Set up Terraform'
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.13.1 # Using a specific, recent version
+
+      - name: 'Terraform Init'
+        run: terraform -chdir="${{ env.TF_WORKING_DIR }}" init
+
+      - name: 'Terraform Validate'
+        run: terraform -chdir="${{ env.TF_WORKING_DIR }}" validate -no-color
+      
+      - name: 'Run TFLint (Best Practices Linter)'
+        uses: terraform-linters/setup-tflint@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          tflint_version: latest
+      
+      - name: 'Run Checkov (Security Scanner)'
+        uses: bridgecrewio/checkov-action@master
+        with:
+          directory: ./
+          framework: terraform
+          soft_fail: true # Fails the build for critical issues only
+
+      # --- Terraform Plan Step ---
+      - name: 'Terraform Plan'
+        id: plan
+        run: terraform -chdir="${{ env.TF_WORKING_DIR }}" plan -no-color -out=tfplan
+
+      # --- Pull Request Commenting Steps ---
+      - name: 'Create Plan Output for PR Comment'
+        if: github.event_name == 'pull_request'
+        id: format-plan
+        run: |
+          PLAN_OUTPUT=$(terraform -chdir="${{ env.TF_WORKING_DIR }}" show -no-color tfplan)
+          COMMENT_BODY="#### Terraform Plan for Dev Environment 📖\`\`\`terraform\n$PLAN_OUTPUT\n\`\`\`"
+          echo "comment_body<<EOF" >> $GITHUB_OUTPUT
+          echo "$COMMENT_BODY" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: 'Post Plan to Pull Request'
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const { data: comments } = await github.rest.issues.listComments({ owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number, });
+            const botComment = comments.find(comment => comment.user.login === 'github-actions[bot]' && comment.body.includes('Terraform Plan for Dev Environment'));
+            const newBody = `${{ steps.format-plan.outputs.comment_body }}`;
+            if (botComment) { await github.rest.issues.updateComment({ owner: context.repo.owner, repo: context.repo.repo, comment_id: botComment.id, body: newBody }); }
+            else { await github.rest.issues.createComment({ owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number, body: newBody }); }
+
+      # --- Artifact Upload Steps ---
+      - name: 'Upload Terraform Plan Artifact'
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfplan-dev
+          path: ${{ env.TF_WORKING_DIR }}/tfplan
+          retention-days: 1
+          
+      - name: 'Upload Lambda ZIP Artifact'
+        uses: actions/upload-artifact@v4
+        with:
+          name: lambda-package-dev
+          path: lambda_package.zip
+          retention-days: 1
+
+  # JOB 2: APPLY CHANGES TO DEV ENVIRONMENT
+  terraform-apply:
+    name: 'Terraform Apply to Dev'
+    runs-on: ubuntu-latest
+    needs: build_and_plan
+    # This job only runs on a push to the main branch, not on pull requests.
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+    env:
+      AWS_REGION: 'us-east-1'
+      TF_WORKING_DIR: 'environments/dev'
+        
+    steps:
+      - name: 'Checkout Repository'
+        uses: actions/checkout@v4
+
+      - name: 'Configure AWS Credentials (OIDC)'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::456202167790:role/githubaction #  IAM ROLE ARN
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: GitHubActions-Terraform-Apply
+
+      - name: 'Set up Terraform'
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.13.1
+      
+      - name: 'Download Terraform Plan Artifact'
         uses: actions/download-artifact@v4
         with:
-          name: lambda-package
+          name: tfplan-dev
+          path: ${{ env.TF_WORKING_DIR }}
 
-      - name: Move Lambda artifact for Terraform
-        run: mv lambda_package.zip ./terraform/
+      - name: 'Download Lambda ZIP Artifact'
+        uses: actions/download-artifact@v4
+        with:
+          name: lambda-package-dev
+          # Download to the root, where Terraform expects to find it
+          path: . 
 
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-
-      - name: Set environment variable for tfvars
-        run: |
-          if [[ "${{ github.ref_name }}" == "main" ]]; then
-            echo "TF_VARS_FILE=prod.tfvars" >> $GITHUB_ENV
-          elif [[ "${{ github.ref_name }}" == "staging" ]]; then
-            echo "TF_VARS_FILE=staging.tfvars" >> $GITHUB_ENV
-          else
-            echo "TF_VARS_FILE=dev.tfvars" >> $GITHUB_ENV
-          fi
-
-      - name: Terraform Init
-        run: terraform init
-        working-directory: ./terraform
-
-      - name: Terraform Plan
-        run: terraform plan -var-file=${{ env.TF_VARS_FILE }} -out=tfplan
-        working-directory: ./terraform
-
-      - name: Terraform Apply
-        run: terraform apply -auto-approve tfplan
-        working-directory: ./terraform
-
-      - name: Get S3 Bucket Name output
-        id: get_s3_url
-        run: echo "url=https://s3.console.aws.amazon.com/s3/buckets/$(terraform output -raw s3_bucket_name)" >> $GITHUB_OUTPUT
-        working-directory: ./terraform
+      - name: 'Terraform Init'
+        run: terraform -chdir="${{ env.TF_WORKING_DIR }}" init
+        
+      - name: 'Terraform Apply'
+        run: terraform -chdir="${{ env.TF_WORKING_DIR }}" apply -auto-approve tfplan
