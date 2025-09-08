@@ -58,7 +58,7 @@ module "cloudwatch" {
 
 # These resources connect the modules together.
 
-# Grant S3 permission to invoke the Lambda function
+# Grant  S3 permission to invoke the Lambda function
 resource "aws_lambda_permission" "allow_s3" {
   statement_id  = "AllowExecutionFromS3"
   action        = "lambda:InvokeFunction"
