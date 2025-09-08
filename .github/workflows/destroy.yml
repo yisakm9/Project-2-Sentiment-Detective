@@ -1,67 +1,83 @@
-name: Destroy AWS Infrastructure
+# .github/workflows/destroy-dev.yml
 
-# This 'workflow_dispatch' trigger makes the workflow manual.
-# It will show a "Run workflow" button in the GitHub Actions UI.
+# Name of the GitHub Actions workflow for destroying the environment.
+name: 'Destroy Dev Environment'
+
+# This workflow is triggered manually from the GitHub Actions UI.
 on:
   workflow_dispatch:
     inputs:
-      environment:
-        description: 'The environment to destroy (e.g., development, staging, production)'
+      confirmation:
+        description: 'MANDATORY: To prevent accidental destruction, type "destroy" to confirm.'
         required: true
-        type: choice
-        options:
-          - development
-          - staging
-          - production
+        default: 'do-not-destroy'
 
 jobs:
-  destroy:
-    name: Destroy Infrastructure
+  # This workflow contains a single job to destroy the infrastructure.
+  terraform-destroy:
+    name: 'Terraform Destroy'
     runs-on: ubuntu-latest
-    
-    # Use the selected environment for any protection rules
-    environment:
-      name: ${{ inputs.environment }}
+
+    # These environment variables are available to all steps in this job.
+    env:
+      AWS_REGION: 'us-east-1'
+      TF_WORKING_DIR: 'environments/dev'
+      CONFIRMATION_PHRASE: "destroy"
+
+    # --- OIDC Permissions ---
+    permissions:
+      id-token: write  # Required for OIDC authentication to AWS
+      contents: read   # Required to checkout the repository
 
     steps:
-      - name: Checkout code
+      # 1. Checkout Repository
+      - name: 'Checkout Code'
         uses: actions/checkout@v4
 
-      - name: Configure AWS Credentials
+      # 2. Configure AWS Credentials
+      - name: 'Configure AWS Credentials (OIDC)'
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_KEY }}
-          aws-region: us-east-1
+          role-to-assume: arn:aws:iam::456202167790:role/githubaction #  IAM ROLE ARN
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: GitHubActions-Terraform-Destroy
 
-      - name: Setup Terraform
+      # 3. Setup Python
+      # Required to create a dummy zip file for the Terraform plan.
+      - name: 'Set up Python 3.11'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      # 4. Package Lambda Function
+      # This step is necessary so that terraform can calculate the source_code_hash
+      # during the destroy plan phase.
+      - name: 'Create Lambda Deployment Package'
+        run: |
+          cd src/lambda_function
+          zip -r ../../lambda_package.zip .
+
+      # 5. Setup Terraform
+      - name: 'Set up Terraform'
         uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.13.1 # Use a specific version for consistency.
 
-      # --- THIS IS THE FIX ---
-      # Create a dummy zip file. Terraform requires this file to exist for the
-      # filebase64sha256() function in your HCL, even for a destroy operation.
-      # This step creates a placeholder file to satisfy that requirement.
-      - name: Create Dummy Lambda Package for Destroy
-        run: |
-          echo "This is a placeholder for the destroy workflow" > dummy.txt
-          zip terraform/lambda_package.zip dummy.txt
+      # 6. Terraform Init
+      - name: 'Terraform Init'
+        run: terraform -chdir="${{ env.TF_WORKING_DIR }}" init
 
-      - name: Set environment variable for tfvars
+      # 7. Safety Check
+      # This step explicitly checks the user's manual input before proceeding.
+      - name: 'Verify Destroy Confirmation'
         run: |
-          if [[ "${{ inputs.environment }}" == "production" ]]; then
-            echo "TF_VARS_FILE=prod.tfvars" >> $GITHUB_ENV
-          elif [[ "${{ inputs.environment }}" == "staging" ]]; then
-            echo "TF_VARS_FILE=staging.tfvars" >> $GITHUB_ENV
+          if [ "${{ github.event.inputs.confirmation }}" != "${{ env.CONFIRMATION_PHRASE }}" ]; then
+            echo "❌ ERROR: Confirmation phrase did not match. Aborting workflow."
+            exit 1
           else
-            echo "TF_VARS_FILE=dev.tfvars" >> $GITHUB_ENV
+            echo "✅ Confirmation phrase matches. Proceeding with destroy operation."
           fi
 
-      - name: Terraform Init
-        run: terraform init
-        working-directory: ./terraform
-
-      - name: Terraform Destroy
-        # Runs 'terraform destroy' using the correct .tfvars file for the environment
-        # The '-auto-approve' flag confirms the destruction without manual input in the terminal
-        run: terraform destroy -auto-approve -var-file=${{ env.TF_VARS_FILE }}
-        working-directory: ./terraform
+      # 8. Terraform Destroy
+      - name: 'Terraform Destroy'
+        run: terraform -chdir="${{ env.TF_WORKING_DIR }}" destroy -auto-approve
