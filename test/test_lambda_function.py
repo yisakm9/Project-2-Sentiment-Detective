@@ -38,7 +38,6 @@ def mock_aws_environment():
             AttributeDefinitions=[{'AttributeName': 'id', 'AttributeType': 'S'}],
             BillingMode='PAY_PER_REQUEST'
         )
-        # Correctly create the topic using the name from the ARN
         sns.create_topic(Name=os.environ['SNS_TOPIC_ARN'].split(':')[-1])
         
         yield { "s3": s3, "dynamodb": dynamodb, "sns": sns }
@@ -74,4 +73,45 @@ def test_handler_positive_feedback(mock_aws_environment, monkeypatch):
     assert len(sns_calls) == 0
     assert len(cw_calls) == 0
 
-def test_handler_negative_high_urgency_feedback(mock_aws_environment
+# --- THIS FUNCTION SIGNATURE IS NOW CORRECTED ---
+def test_handler_negative_high_urgency_feedback(mock_aws_environment, monkeypatch):
+    """Tests the end-to-end flow for a negative, urgent review, ensuring alerts are sent."""
+    feedback_bucket = 'test-feedback-bucket'
+    feedback_key = 'urgent-issue.txt'
+    
+    mock_bedrock_response = {
+        "sentiment": "negative",
+        "sentiment_score": 0.1,
+        "topics": ["Account Access", "Data Loss"],
+        "urgency": "high"
+    }
+    monkeypatch.setattr('lambda_function.analyze_feedback_with_bedrock', lambda text: mock_bedrock_response)
+
+    sns_calls = []
+    cw_calls = []
+    monkeypatch.setattr('lambda_function.send_sns_alert', lambda analysis: sns_calls.append(analysis))
+    monkeypatch.setattr('lambda_function.publish_negative_sentiment_metric', lambda: cw_calls.append(True))
+    
+    mock_aws_environment["s3"].put_object(Bucket=feedback_bucket, Key=feedback_key, Body="The site crashed and I think I lost my data!")
+    s3_event = { "Records": [{"s3": {"bucket": {"name": feedback_bucket}, "object": {"key": feedback_key}}}] }
+    
+    lambda_handler(s3_event, {})
+    
+    assert len(cw_calls) == 1
+    assert len(sns_calls) == 1
+    assert sns_calls[0]['urgency'] == 'high'
+
+def test_bedrock_output_parsing_with_extra_text(monkeypatch):
+    """Tests the regex's ability to extract JSON from a messy LLM output."""
+    messy_llm_output = 'Sure, here is the JSON you requested:\n```json\n{"sentiment": "negative", "sentiment_score": 0.2, "topics": ["Billing"], "urgency": "medium"}\n```\nLet me know if you need anything else!'
+    
+    def mock_invoke_model(*args, **kwargs):
+        response_payload = json.dumps({"generation": messy_llm_output})
+        return { 'body': io.BytesIO(response_payload.encode('utf-8')) }
+    monkeypatch.setattr('lambda_function.bedrock.invoke_model', mock_invoke_model)
+
+    result = analyze_feedback_with_bedrock("some feedback text")
+
+    assert result['sentiment'] == 'negative'
+    assert result['urgency'] == 'medium'
+    assert 'error' not in result
